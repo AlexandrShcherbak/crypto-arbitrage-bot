@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import aiohttp
@@ -8,13 +9,17 @@ from web3 import AsyncWeb3
 from web3.providers.async_rpc import AsyncHTTPProvider
 
 from config import get_settings
-from utils import AsyncTTLCache, retry_async
+from utils import AsyncRateLimiter, AsyncTTLCache, retry_async
+
+logger = logging.getLogger(__name__)
 
 
 class DEXParser:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.cache: AsyncTTLCache[list[dict[str, Any]]] = AsyncTTLCache(self.settings.cache_ttl_sec)
+        self.last_success: dict[str, list[dict[str, Any]]] = {}
+        self.rate_limiter = AsyncRateLimiter(self.settings.max_api_calls_per_sec, 1.0)
         self.graph_endpoints = {
             "ethereum": "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3",
             "bsc": "https://api.thegraph.com/subgraphs/name/pancakeswap/exchange-v3-bsc",
@@ -28,13 +33,19 @@ class DEXParser:
         if cached:
             return cached
 
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-            tasks = [self._fetch_asset(session, asset) for asset in assets]
-            prices = [x for x in await asyncio.gather(*tasks, return_exceptions=False) if x]
-            await self.cache.set(cache_key, prices)
-            return prices
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+                tasks = [self._fetch_asset(session, asset) for asset in assets]
+                prices = [x for x in await asyncio.gather(*tasks, return_exceptions=False) if x]
+                await self.cache.set(cache_key, prices)
+                self.last_success[cache_key] = prices
+                return prices
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("DEX fetch failed, fallback to stale cache: %s", exc)
+            return self.last_success.get(cache_key, [])
 
     async def _fetch_asset(self, session: aiohttp.ClientSession, asset: str) -> dict[str, Any] | None:
+        await self.rate_limiter.wait()
         async with session.get(f"{self.settings.coincap_base_url}/assets/{asset.lower()}") as resp:
             if resp.status != 200:
                 return None
@@ -65,6 +76,7 @@ class DEXParser:
             % (token0, token1)
         }
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            await self.rate_limiter.wait()
             async with session.post(endpoint, json=query) as resp:
                 if resp.status != 200:
                     return None
