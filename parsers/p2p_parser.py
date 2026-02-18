@@ -6,7 +6,7 @@ from typing import Any
 import aiohttp
 
 from config import get_settings
-from utils import AsyncTTLCache
+from utils import AsyncRateLimiter, AsyncTTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,8 @@ class P2PParser:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.cache: AsyncTTLCache[list[dict[str, Any]]] = AsyncTTLCache(self.settings.cache_ttl_sec)
+        self.last_success: dict[str, list[dict[str, Any]]] = {}
+        self.rate_limiter = AsyncRateLimiter(self.settings.max_api_calls_per_sec, 1.0)
 
     async def fetch_all(
         self,
@@ -32,13 +34,18 @@ class P2PParser:
             return cached
 
         opportunities: list[dict[str, Any]] = []
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
-            for fiat in fiats:
-                opportunities.extend(await self._binance(session, asset, fiat, banks, min_limit, max_limit))
-                opportunities.extend(await self._bybit(session, asset, fiat, banks, min_limit, max_limit))
-                opportunities.extend(await self._garantex(session, asset, fiat, min_limit, max_limit))
-        await self.cache.set(cache_key, opportunities)
-        return opportunities
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+                for fiat in fiats:
+                    opportunities.extend(await self._binance(session, asset, fiat, banks, min_limit, max_limit))
+                    opportunities.extend(await self._bybit(session, asset, fiat, banks, min_limit, max_limit))
+                    opportunities.extend(await self._garantex(session, asset, fiat, min_limit, max_limit))
+            await self.cache.set(cache_key, opportunities)
+            self.last_success[cache_key] = opportunities
+            return opportunities
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("P2P fetch failed, fallback to stale cache: %s", exc)
+            return self.last_success.get(cache_key, [])
 
     async def _binance(self, session: aiohttp.ClientSession, asset: str, fiat: str, banks: list[str], min_limit: float, max_limit: float) -> list[dict[str, Any]]:
         url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
@@ -51,6 +58,7 @@ class P2PParser:
             "payTypes": banks,
         }
         try:
+            await self.rate_limiter.wait()
             async with session.post(url, json=payload) as resp:
                 if resp.status != 200:
                     return []
@@ -83,6 +91,7 @@ class P2PParser:
         url = "https://api2.bybit.com/fiat/otc/item/online"
         payload = {"tokenId": asset, "currencyId": fiat, "side": "1", "size": "10", "page": "1", "payment": banks}
         try:
+            await self.rate_limiter.wait()
             async with session.post(url, json=payload) as resp:
                 if resp.status != 200:
                     return []
@@ -113,6 +122,7 @@ class P2PParser:
         if fiat != "RUB":
             return []
         try:
+            await self.rate_limiter.wait()
             async with session.get("https://garantex.org/api/v2/depth?market=usdtrub") as resp:
                 if resp.status != 200:
                     return []
