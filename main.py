@@ -5,7 +5,7 @@ import logging
 
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-from bot import callbacks, history, scan, settings_handler, start
+from bot import callbacks, export_history, history, scan, settings_handler, start
 from config import get_settings
 from data import Database
 
@@ -66,11 +66,13 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("scan", scan))
     app.add_handler(CommandHandler("settings", settings_handler))
     app.add_handler(CommandHandler("history", history))
+    app.add_handler(CommandHandler("export", export_history))
     app.add_handler(CallbackQueryHandler(callbacks))
 
     app.add_handler(MessageHandler(filters.Regex("^🔎 Сканировать$"), scan))
     app.add_handler(MessageHandler(filters.Regex("^⚙️ Настройки$"), settings_handler))
     app.add_handler(MessageHandler(filters.Regex("^📜 История$"), history))
+    app.add_handler(MessageHandler(filters.Regex("^📤 Экспорт XLSX$"), export_history))
     return app
 
 
