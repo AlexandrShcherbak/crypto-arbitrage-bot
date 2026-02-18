@@ -17,6 +17,8 @@ class Settings:
     enabled_cex: List[str]
     p2p_fiats: List[str]
     p2p_banks: List[str]
+    min_liquidity_usd: float
+    max_api_calls_per_sec: int
 
 
 @lru_cache(maxsize=1)
@@ -31,4 +33,7 @@ def get_settings() -> Settings:
         enabled_cex=[x.strip() for x in os.getenv("ENABLED_CEX", "binance,bybit,okx,kucoin,kraken,huobi,bitfinex,mexc,gateio,coinbase").split(",") if x.strip()],
         p2p_fiats=[x.strip().upper() for x in os.getenv("P2P_FIATS", "RUB,USD,EUR,UZS,KZT,UAH").split(",") if x.strip()],
         p2p_banks=[x.strip() for x in os.getenv("P2P_BANKS", "Tinkoff,Sberbank,Raiffeisen,QIWI,YooMoney").split(",") if x.strip()],
+        min_liquidity_usd=float(os.getenv("MIN_LIQUIDITY_USD", "1000")),
+        max_api_calls_per_sec=int(os.getenv("MAX_API_CALLS_PER_SEC", "5")),
     )
+
