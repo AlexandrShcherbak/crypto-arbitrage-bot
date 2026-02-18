@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from analyzers.arbitrage_analyzer import ArbitrageAnalyzer
+from analyzers.opportunity_finder import filter_opportunities
 from analyzers.spread_calculator import calculate_international_profit, calculate_p2p_profit, calculate_spread_percent
 from parsers.excel_parser import ExcelStrategyParser
+from utils.validators import validate_profit_threshold
 
 
 def test_spread_formula() -> None:
@@ -23,6 +25,22 @@ def test_excel_strategy_detection() -> None:
     parser = ExcelStrategyParser()
     assert parser._detect_type("Покупка на Binance P2P через Тинькофф") == "p2p"
     assert parser._detect_type("ETH Uniswap -> PancakeSwap") == "dex"
+
+
+def test_validate_profit_threshold() -> None:
+    assert validate_profit_threshold(1.0)
+    assert not validate_profit_threshold(-1)
+    assert not validate_profit_threshold(101)
+
+
+def test_filter_by_strategy() -> None:
+    data = [
+        {"type": "p2p", "spread_percent": 3.2},
+        {"type": "cex-cex", "spread_percent": 3.0},
+    ]
+    result = filter_opportunities(data, min_profit=1.0, strategy="p2p")
+    assert len(result) == 1
+    assert result[0]["type"] == "p2p"
 
 
 def test_arbitrage_analyzer_find() -> None:
